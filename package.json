@@ -1,0 +1,15 @@
+{
+  "name": "ai-accounting-automation",
+  "version": "1.0.0",
+  "scripts": {
+    "mcp": "node mcp/tally-server.mjs",
+    "ping": "node scripts/tally-ping.mjs",
+    "outstanding": "node scripts/check-outstanding.mjs",
+    "seed": "node scripts/seed-demo-data.mjs"
+  },
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tally": {
+      "command": "node",
+      "args": ["mcp/tally-server.mjs"],
+      "env": {
+        "TALLY_URL": "http://localhost:9000",
+        "TALLY_COMPANY": "Demo Trading Co"
+      }
+    }
+  }
+}

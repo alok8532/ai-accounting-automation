@@ -1,0 +1,108 @@
+// Step 3: Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
+// READ-ONLY by design: every tool sends only Export requests — nothing is written to Tally.
+// Run: node mcp/tally-server.mjs   (normally launched by the MCP client via .mcp.json)
+// NOTE: stdout is the MCP protocol channel — log only to stderr.
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { TALLY_URL, COMPANY, postXml, collectionRequest, decode } from "../lib/tally.mjs";
+import { getReceivables, field, fmtDate } from "../lib/receivables.mjs";
+
+const server = new McpServer({ name: "tally", version: "0.1.0" });
+
+const ok = (data) => ({
+  content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+  structuredContent: Array.isArray(data) ? { rows: data } : data,
+});
+const fail = (err) => ({
+  isError: true,
+  content: [{ type: "text", text: `Tally request failed: ${err.message}. Check that TallyPrime is open, ` +
+    `company "${COMPANY}" is loaded, and the HTTP server is enabled at ${TALLY_URL}.` }],
+});
+const tool = (name, meta, fn) =>
+  server.registerTool(name, { ...meta, annotations: { readOnlyHint: true, openWorldHint: false } },
+    async (args) => { try { return ok(await fn(args)); } catch (e) { return fail(e); } });
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+const toTallyDate = (d) => d.replaceAll("-", "");
+// Tally amounts: negative = Debit, positive = Credit.
+const drCr = (n) => ({ amount: Math.abs(n), side: n < 0 ? "Dr" : n > 0 ? "Cr" : "" });
+
+tool("tally_status", {
+  title: "Tally status",
+  description: "Check that TallyPrime is reachable and list the companies currently open.",
+}, async () => {
+  const ping = (await (await fetch(TALLY_URL)).text()).replace(/<[^>]+>/g, "").trim();
+  const xml = await postXml(collectionRequest("CompanyList", "Company", ["Name"]));
+  const companies = [...xml.matchAll(/<COMPANY NAME="([^"]*)"/g)].map((m) => decode(m[1]));
+  return { server: ping, url: TALLY_URL, configuredCompany: COMPANY, openCompanies: companies };
+});
+
+tool("list_ledgers", {
+  title: "List ledgers",
+  description: "List ledgers with parent group, email and closing balance (Dr/Cr). Optionally filter by group name.",
+  inputSchema: { group: z.string().optional().describe('Exact parent group, e.g. "Sundry Debtors"') },
+}, async ({ group }) => {
+  const xml = await postXml(collectionRequest("L", "Ledger", ["Name", "Parent", "Email", "ClosingBalance"]));
+  return [...xml.matchAll(/<LEDGER NAME="([^"]*)"[\s\S]*?<\/LEDGER>/g)]
+    .map((m) => ({
+      ledger: decode(m[1]),
+      group: decode(field(m[0], "PARENT")),
+      email: decode(field(m[0], "EMAIL")),
+      closingBalance: drCr(Number(field(m[0], "CLOSINGBALANCE") || 0)),
+    }))
+    .filter((l) => !group || l.group.toLowerCase() === group.toLowerCase());
+});
+
+tool("get_receivables", {
+  title: "Outstanding receivables",
+  description: "Bill-wise open receivables with bill date, due date (bill date + credit days), overdue days, " +
+    "outstanding amount (INR) and customer email. Sorted most overdue first.",
+  inputSchema: {
+    asOf: isoDate.optional().describe("Ageing date, default today"),
+    minOverdueDays: z.number().int().min(0).optional().describe("Only bills overdue by at least this many days"),
+    customer: z.string().optional().describe("Case-insensitive substring match on customer name"),
+    retainerOnly: z.boolean().optional().describe('Only customers under "Retainer Customers"'),
+  },
+}, async ({ asOf, minOverdueDays = 0, customer, retainerOnly }) => {
+  const date = new Date(asOf ?? fmtDate(new Date()));
+  const rows = (await getReceivables(date)).filter((r) =>
+    r.overdueDays >= minOverdueDays &&
+    (!customer || r.customer.toLowerCase().includes(customer.toLowerCase())) &&
+    (!retainerOnly || r.retainer === "yes"));
+  return { asOf: fmtDate(date), count: rows.length, totalOutstanding: rows.reduce((s, r) => s + r.outstanding, 0), bills: rows };
+});
+
+tool("list_vouchers", {
+  title: "List vouchers",
+  description: "List vouchers (Sales, Receipt, etc.) in a date range with party, amount, narration and ledger entries.",
+  inputSchema: {
+    from: isoDate.describe("Start date YYYY-MM-DD"),
+    to: isoDate.describe("End date YYYY-MM-DD"),
+    voucherType: z.string().optional().describe('e.g. "Sales", "Receipt"'),
+    party: z.string().optional().describe("Case-insensitive substring match on party ledger"),
+  },
+}, async ({ from, to, voucherType, party }) => {
+  const xml = await postXml(collectionRequest("V", "Voucher",
+    ["Date", "VoucherTypeName", "VoucherNumber", "PartyLedgerName", "Amount", "Narration"],
+    { from: toTallyDate(from), to: toTallyDate(to) }));
+  return [...xml.matchAll(/<VOUCHER [\s\S]*?<\/VOUCHER>/g)].map(([v]) => ({
+    date: field(v, "DATE").replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"),
+    type: decode(field(v, "VOUCHERTYPENAME")),
+    number: field(v, "VOUCHERNUMBER").trim(),
+    party: decode(field(v, "PARTYLEDGERNAME")),
+    amount: Math.abs(Number(field(v, "AMOUNT") || 0)),
+    narration: decode(field(v, "NARRATION")),
+    entries: [...v.matchAll(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g)].map(([e]) => ({
+      ledger: decode(field(e, "LEDGERNAME")), ...drCr(Number(field(e, "AMOUNT") || 0)),
+    })),
+  })).filter((v) =>
+    // Tally doesn't apply SVFROMDATE/SVTODATE to collection exports, so filter dates here too.
+    v.date >= from && v.date <= to &&
+    (!voucherType || v.type.toLowerCase() === voucherType.toLowerCase()) &&
+    (!party || v.party.toLowerCase().includes(party.toLowerCase())));
+});
+
+await server.connect(new StdioServerTransport());
+console.error(`tally MCP server ready (Tally: ${TALLY_URL}, company: ${COMPANY})`);
