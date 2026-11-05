@@ -1,5 +1,6 @@
-// Step 3: Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
-// READ-ONLY by design: every tool sends only Export requests — nothing is written to Tally.
+// Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
+// Tally access is READ-ONLY: every Tally tool sends only Export requests — nothing is written to Tally.
+// The one write tool (save_reminder_draft) only saves a local draft email file and an audit log line.
 // Run: node mcp/tally-server.mjs   (normally launched by the MCP client via .mcp.json)
 // NOTE: stdout is the MCP protocol channel — log only to stderr.
 
@@ -8,6 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { TALLY_URL, COMPANY, postXml, collectionRequest, decode } from "../lib/tally.mjs";
 import { getReceivables, field, fmtDate } from "../lib/receivables.mjs";
+import { createReminderDraft } from "../lib/reminders.mjs";
 
 const server = new McpServer({ name: "tally", version: "0.1.0" });
 
@@ -102,6 +104,31 @@ tool("list_vouchers", {
     v.date >= from && v.date <= to &&
     (!voucherType || v.type.toLowerCase() === voucherType.toLowerCase()) &&
     (!party || v.party.toLowerCase().includes(party.toLowerCase())));
+});
+
+// The only tool that writes — a local draft file plus an audit log line. Never writes to Tally, never sends.
+// Checks are enforced in lib/reminders.mjs: recipient comes from the Tally ledger, bills must be open,
+// duplicates within the cooldown are skipped, every attempt is audit-logged.
+server.registerTool("save_reminder_draft", {
+  title: "Save reminder draft",
+  description: "Save one payment reminder email as a draft .eml file under drafts/<today>/<customer>.eml. " +
+    "The recipient is taken from the customer's ledger email in Tally (you cannot set it). " +
+    "Every bill listed must be an open receivable of that customer and be mentioned in the body. " +
+    "Bills already drafted in the last few days are skipped (status skipped_duplicate) — do not retry those. " +
+    "Does NOT send the email and does NOT change Tally.",
+  inputSchema: {
+    customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
+    bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),
+    subject: z.string().min(1).max(200),
+    body: z.string().min(1).describe("Plain-text email body including signature"),
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}, async (args) => {
+  try {
+    return ok(await createReminderDraft(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `Draft not saved: ${e.message}` }] };
+  }
 });
 
 await server.connect(new StdioServerTransport());
