@@ -5,7 +5,10 @@
     "mcp": "node mcp/tally-server.mjs",
     "ping": "node scripts/tally-ping.mjs",
     "outstanding": "node scripts/check-outstanding.mjs",
-    "seed": "node scripts/seed-demo-data.mjs"
+    "ageing": "node scripts/ageing-report.mjs",
+    "probe": "node scripts/probe-tally.mjs",
+    "seed": "node scripts/seed-demo-data.mjs",
+    "test": "node --test \"test/*.test.mjs\""
   },
   "type": "module",
   "dependencies": {

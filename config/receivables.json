@@ -1,0 +1,11 @@
+{
+  "_readme": "Accounting rules for receivables, ageing and reminders. Every key is explained in docs/ACCOUNTING_RULES.md. Change values here, not in code.",
+  "debtorsGroup": "Sundry Debtors",
+  "retainerGroup": "Retainer Customers",
+  "ageingBuckets": [30, 60, 90],
+  "dueDateFallback": "ledger-default",
+  "minBillBalance": 100,
+  "minCustomerNetOverdue": 0,
+  "allowPastAsOf": false,
+  "holdsFile": "config/account-holds.json"
+}

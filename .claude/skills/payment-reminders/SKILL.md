@@ -20,12 +20,13 @@ Draft one reminder email per customer with overdue bills, using live Tally data,
 ## Workflow
 
 1. Call `tally_status`. If Tally is not reachable or the expected company is not open, stop and tell the user what to fix.
-2. Call `get_receivables` with `minOverdueDays: 1` (use the user's date as `asOf` if they gave one; otherwise today). Apply any filter the user asked for (one customer, retainer only, more than N days).
-3. **Group bills by customer.** One email per customer, listing all of that customer's overdue bills. The customer's tier is decided by their **oldest** overdue bill.
+2. Call `get_receivables` with `minOverdueDays: 1` (today's date is the default; past dates are refused by the tool — tell the user why if they ask for one). Apply any filter the user asked for (one customer, Retainer only, more than N days, above an amount → `minAmount`). If the result has `billsWithIssues` (bills whose due date can't be worked out), do not draft for those bills — list them under "Flag for the user".
+3. **Use `customers` to decide who gets an email.** Draft only for customers with `reminder.eligible: true`, and include exactly the bills in `reminder.bills`. For every other customer, report `reminder.reason` (on hold, credits cover the dues, email missing, below threshold…) — do not draft. One email per customer; the tier is decided by their **oldest** bill in `reminder.bills`.
 4. Pick the tier and tone using the rules below, then write the email from the matching template.
 5. Save each email with `save_reminder_draft`. Pass `customer` (exact ledger name), `bills` (the bill numbers in that email), `subject` and `body`. You do not pass an email address: the tool takes it from the customer's Tally ledger.
    - `status: "skipped_duplicate"`: these bills were already drafted recently. Do not retry and do not change the bill list to get around it. Report it to the user.
    - Error ("Draft not saved: …"): do not retry with changes to get around the check. Report the reason to the user.
+   - `replacedTodaysDraft: true`: today's earlier draft for this customer was overwritten. If `droppedBills` is not empty, tell the user those bills are no longer in any draft.
 6. Reply to the user with a summary table: Customer | Bills | Total due | Max days overdue | Tier | Result (saved file / skipped duplicate / not saved + reason). After the table, list anything that needs a human decision (see "Flag for the user").
 
 If the user only wants to *see* drafts, show them in chat and ask before saving.
@@ -48,6 +49,7 @@ If the user only wants to *see* drafts, show them in chat and ask before saving.
 - Dates as **DD-Mon-YYYY**, e.g. 01-Jul-2026.
 - Always call the amount the **balance** (never "invoice amount") — part payments are already deducted.
 - Always include: invoice number(s), invoice date, due date, balance, and a total line if more than one bill.
+- If the customer has `unadjustedCredits` > 0 (an advance or credit note not yet adjusted), add after the total: `Less: advance/credit not yet adjusted ₹{unadjustedCredits}` and `Net amount payable: ₹{reminder.netAmount}`, and ask for the net amount.
 - Always give an easy way out: "If you have already made this payment, please share the UTR/transaction reference so we can update our records."
 - Keep it short: under ~150 words of body text before the bill table.
 - Never threaten legal action, penalties, interest, or stopping supply/service unless the user explicitly tells you to.
@@ -130,3 +132,8 @@ After the summary, list these explicitly (do not hide them in the drafts):
 - **Retainer customers 91+ days overdue**: recommend a personal call from the owner.
 - Customers whose **total due exceeds ₹1,00,000**: recommend a phone follow-up alongside the email.
 - Any bill that looks odd (e.g. negative or zero balance, missing due date): do not draft; mention it.
+- **On hold** (`onHold`, or `customers[].hold`): show the reason and who approved it. Never draft for them.
+- **Credits cover the dues** (reminder reason mentions advances/credits): recommend the accountant adjusts the advance/credit note against the bills in Tally.
+- **Below threshold** (`belowThreshold`): mention the count and total; no reminder.
+- Anything in `warnings` (e.g. due date taken from the ledger default, amounts on account, expired holds).
+- For a full customer-wise ageing picture, use `get_ageing_report`.

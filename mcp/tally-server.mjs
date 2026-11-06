@@ -7,8 +7,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { TALLY_URL, COMPANY, postXml, collectionRequest, decode } from "../lib/tally.mjs";
-import { getReceivables, field, fmtDate } from "../lib/receivables.mjs";
+import { TALLY_URL, COMPANY, tallyFetch, postXml, collectionRequest, decode } from "../lib/tally.mjs";
+import { field } from "../lib/receivables.mjs";
+import { receivablesView, ageingView } from "../lib/report.mjs";
+import { bucketLabels } from "../lib/ageing.mjs";
+import { CONFIG } from "../lib/config.mjs";
 import { createReminderDraft } from "../lib/reminders.mjs";
 
 const server = new McpServer({ name: "tally", version: "0.1.0" });
@@ -19,8 +22,10 @@ const ok = (data) => ({
 });
 const fail = (err) => ({
   isError: true,
-  content: [{ type: "text", text: `Tally request failed: ${err.message}. Check that TallyPrime is open, ` +
-    `company "${COMPANY}" is loaded, and the HTTP server is enabled at ${TALLY_URL}.` }],
+  content: [{ type: "text", text: err.rule
+    ? err.message // a business rule / configuration problem, not a connection problem
+    : `Tally request failed: ${err.message}. Check that TallyPrime is open, ` +
+      `company "${COMPANY}" is loaded, and the HTTP server is enabled at ${TALLY_URL}.` }],
 });
 const tool = (name, meta, fn) =>
   server.registerTool(name, { ...meta, annotations: { readOnlyHint: true, openWorldHint: false } },
@@ -35,7 +40,7 @@ tool("tally_status", {
   title: "Tally status",
   description: "Check that TallyPrime is reachable and list the companies currently open.",
 }, async () => {
-  const ping = (await (await fetch(TALLY_URL)).text()).replace(/<[^>]+>/g, "").trim();
+  const ping = (await tallyFetch()).replace(/<[^>]+>/g, "").trim();
   const xml = await postXml(collectionRequest("CompanyList", "Company", ["Name"]));
   const companies = [...xml.matchAll(/<COMPANY NAME="([^"]*)"/g)].map((m) => decode(m[1]));
   return { server: ping, url: TALLY_URL, configuredCompany: COMPANY, openCompanies: companies };
@@ -57,23 +62,39 @@ tool("list_ledgers", {
     .filter((l) => !group || l.group.toLowerCase() === group.toLowerCase());
 });
 
+const filters = {
+  asOf: isoDate.optional().describe("Ageing date, default today (India time). Past dates are refused unless enabled in config."),
+  customer: z.string().optional().describe("Case-insensitive substring match on customer name"),
+  retainerOnly: z.boolean().optional().describe(`Only Retainer customers (group "${CONFIG.retainerGroup}" and its sub-groups)`),
+};
+
 tool("get_receivables", {
   title: "Outstanding receivables",
-  description: "Bill-wise open receivables with bill date, due date (bill date + credit days), overdue days, " +
-    "outstanding amount (INR) and customer email. Sorted most overdue first.",
+  description: "Bill-wise open receivables of customers (Sundry Debtors, incl. sub-groups): bill date, due date " +
+    "(+ dueDateSource), overdue days, balance (net of part payments) and customer email status. `bills` = bills " +
+    "worth chasing: overdue by >= minOverdueDays, balance >= minAmount, not on hold. `customers` gives each " +
+    "customer's unadjusted advances/credits, netOverdue and whether a reminder is allowed (reminder.eligible / " +
+    "reminder.reason). Left-out bills are listed in onHold, belowThreshold and billsWithIssues — report them.",
   inputSchema: {
-    asOf: isoDate.optional().describe("Ageing date, default today"),
-    minOverdueDays: z.number().int().min(0).optional().describe("Only bills overdue by at least this many days"),
-    customer: z.string().optional().describe("Case-insensitive substring match on customer name"),
-    retainerOnly: z.boolean().optional().describe('Only customers under "Retainer Customers"'),
+    ...filters,
+    minOverdueDays: z.number().int().min(0).optional().describe("Only bills overdue by at least this many days, e.g. 30, 60, 90"),
+    minAmount: z.number().min(0).optional().describe(`Only bills with balance >= this (INR). Default ${CONFIG.minBillBalance}`),
   },
-}, async ({ asOf, minOverdueDays = 0, customer, retainerOnly }) => {
-  const date = new Date(asOf ?? fmtDate(new Date()));
-  const rows = (await getReceivables(date)).filter((r) =>
-    r.overdueDays >= minOverdueDays &&
-    (!customer || r.customer.toLowerCase().includes(customer.toLowerCase())) &&
-    (!retainerOnly || r.retainer === "yes"));
-  return { asOf: fmtDate(date), count: rows.length, totalOutstanding: rows.reduce((s, r) => s + r.outstanding, 0), bills: rows };
+}, (args) => receivablesView(args));
+
+tool("get_ageing_report", {
+  title: "Outstanding ageing report",
+  description: `Customer-wise ageing of receivables in buckets (${bucketLabels(CONFIG.ageingBuckets).join(", ")}) by days ` +
+    "overdue from the due date, with unadjusted advances/credit notes, on-account amounts, net due, Retainer flag, " +
+    "hold status, email status, totals and warnings. includePayments adds each bill's billed amount and the " +
+    "receipts/credit notes adjusted against it (slower: reads all vouchers).",
+  inputSchema: {
+    ...filters,
+    includePayments: z.boolean().optional().describe("Add bill-wise payment history (default false)"),
+  },
+}, async (args) => {
+  const v = await ageingView(args);
+  return { ...v.report, ...(args.includePayments && { bills: v.rows }) };
 });
 
 tool("list_vouchers", {
