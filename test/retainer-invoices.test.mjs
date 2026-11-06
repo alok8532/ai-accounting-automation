@@ -287,7 +287,8 @@ test("Gmail destination: draft in Gmail with the invoice PDF attached, never sen
   const r = await create({ destination: "gmail", customers: ["Gupta Healthcare"] });
   const d = r.results[0].draft;
   assert.equal(d.status, "saved");
-  assert.equal(d.gmailMessageId, "m-d1");
+  assert.equal(d.gmailMessageId, "0a1b2c3d4e5f6001");
+  assert.equal(d.gmailLink, "https://mail.google.com/mail/?authuser=me%40example.com#drafts?compose=0a1b2c3d4e5f6001");
   const raw = g.state.drafts[0].raw;
   assert.equal(d.file, undefined, "no local .eml for a Gmail draft");
   assert.ok(!existsSync(join(tmp, "drafts")));

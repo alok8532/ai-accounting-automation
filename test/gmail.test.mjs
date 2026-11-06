@@ -119,7 +119,7 @@ test("switching GMAIL_SCOPE requires a new login", async () => {
 test("compose mode: drafts.create with an HTML + text message", async () => {
   await connect();
   const r = await client.createGmailDraft(sample);
-  assert.deepEqual(r, { gmailDraftId: "d1", gmailMessageId: "m-d1", gmailThreadId: "t-d1", gmailMode: "compose" });
+  assert.deepEqual(r, { gmailDraftId: "d1", gmailMessageId: "0a1b2c3d4e5f6001", gmailThreadId: "1a1b2c3d4e5f6001", gmailMode: "compose" });
   assert.equal(g.state.drafts[0].path, "/gmail/v1/users/me/drafts");
   assert.match(g.state.drafts[0].raw, /^To: cust@example\.com\r\n/);
   assert.match(g.state.drafts[0].raw, /multipart\/alternative/);
@@ -229,4 +229,14 @@ test("revoke deletes the local token", async () => {
   assert.equal(r.revoked, true);
   assert.equal(await oauth.connectedAccount(), null);
   await assert.rejects(oauth.getAccessToken(), /not connected/);
+});
+
+test("draft link: opens the draft in Gmail; refuses odd ids; no account -> no authuser", async () => {
+  const { gmailDraftLink } = await import("../lib/gmail/links.mjs");
+  assert.equal(gmailDraftLink("1a1b207d4287c04e", "alok.sharma@neocepts.com"),
+    "https://mail.google.com/mail/?authuser=alok.sharma%40neocepts.com#drafts?compose=1a1b207d4287c04e");
+  assert.equal(gmailDraftLink("1a1b207d4287c04e", null), "https://mail.google.com/mail/#drafts?compose=1a1b207d4287c04e");
+  assert.equal(gmailDraftLink("1a1b207d4287c04e", "a b@x.com&evil=1"), "https://mail.google.com/mail/#drafts?compose=1a1b207d4287c04e");
+  assert.equal(gmailDraftLink("../x\"><script>", "a@b.com"), null);
+  assert.equal(gmailDraftLink(undefined, "a@b.com"), null);
 });

@@ -7,6 +7,7 @@
 
 import { login, revoke, getAccessToken, gmailConfig, connectedAccount, invalidateAccessToken } from "../lib/gmail/oauth.mjs";
 import { createGmailDraft } from "../lib/gmail/client.mjs";
+import { gmailDraftLink } from "../lib/gmail/links.mjs";
 
 // A tiny one-page PDF, to check that attachments arrive intact.
 function samplePdf() {
@@ -66,6 +67,7 @@ try {
       attachments: [{ filename: "TEST-invoice.pdf", contentType: "application/pdf", content: samplePdf() }],
     });
     console.log("Test draft created:", r);
+    console.log("Open it directly:", gmailDraftLink(r.gmailMessageId, acc.account));
     console.log("Open Gmail -> Drafts. Check: it is there, opens as an editable draft, shows the table, and has TEST-invoice.pdf.");
   } else if (cmd === "revoke") {
     const r = await revoke();

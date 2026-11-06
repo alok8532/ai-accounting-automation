@@ -43,6 +43,7 @@ const body = (bills) => `Dear team,\n\nInvoice ${bills[0]} | Dated 01-Jun-2026 |
   `${bills.slice(1).map((b) => `Invoice ${b} | Dated 02-Oct-2026 | Due 01-Nov-2026 | Balance ₹23,600\n`).join("")}\nRegards,\nAccounts Team`;
 const item = (customer, bills) => ({ customer, bills, subject: `Payment reminder: Invoice ${bills.join(", ")} – due`, body: body(bills) });
 const gmailDraft = (customer, bills, extra = {}) => R.createReminderDraft({ ...item(customer, bills), destination: "gmail", ...extra });
+const log2Link = (log) => log.find((e) => e.status === "saved" && e.gmail)?.gmail.link;
 const gmailCalls = () => g.state.requests.filter((q) => q.path.startsWith("/gmail/")).length;
 
 test("gmail destination: Gmail draft only (no local file), recipient from Tally, ids returned, never sent", async () => {
@@ -50,7 +51,8 @@ test("gmail destination: Gmail draft only (no local file), recipient from Tally,
   assert.equal(r.status, "saved");
   assert.equal(r.sent, false);
   assert.equal(r.destination, "gmail");
-  assert.deepEqual(r.gmail, { messageId: "m-d1", draftId: null, threadId: "t-d1", mode: "insert", account: "me@example.com" });
+  assert.deepEqual(r.gmail, { messageId: "0a1b2c3d4e5f6001", draftId: null, threadId: "1a1b2c3d4e5f6001", mode: "insert", account: "me@example.com",
+    link: "https://mail.google.com/mail/?authuser=me%40example.com#drafts?compose=0a1b2c3d4e5f6001" });
   assert.equal(r.file, undefined);
   await assert.rejects(readFile(join(tmp, "drafts"), "utf8"), "no local drafts folder is created");
   const raw = g.state.drafts[0].raw;
@@ -59,7 +61,7 @@ test("gmail destination: Gmail draft only (no local file), recipient from Tally,
   assert.equal(g.state.requests.filter((q) => /send/i.test(q.path)).length, 0);
   const log = await readAudit();
   assert.deepEqual(log.map((e) => e.status), ["gmail_pending", "saved"]);
-  assert.equal(log[1].gmail.messageId, "m-d1");
+  assert.equal(log[1].gmail.messageId, "0a1b2c3d4e5f6001");
   assert.equal(log[1].attemptId, log[0].attemptId);
   assert.ok(log.every((e) => e.body === undefined), "audit never stores the email body");
 });
@@ -97,7 +99,8 @@ test("duplicate: same bill already in a Gmail draft today -> skipped, no second 
   await gmailDraft("Kapoor Builders", ["DEMO-001"]);
   const again = await gmailDraft("Kapoor Builders", ["DEMO-001", "DEMO-009"]);
   assert.equal(again.status, "skipped_duplicate");
-  assert.deepEqual(again.duplicates.map((d) => [d.bill, d.source, d.gmailMessageId]), [["DEMO-001", "gmail draft (today)", "m-d1"]]);
+  assert.deepEqual(again.duplicates.map((d) => [d.bill, d.source, d.gmailMessageId]), [["DEMO-001", "gmail draft (today)", "0a1b2c3d4e5f6001"]]);
+  assert.equal(again.duplicates[0].gmailLink, "https://mail.google.com/mail/?authuser=me%40example.com#drafts?compose=0a1b2c3d4e5f6001", "the skip message links to the existing draft");
   const local = await R.createReminderDraft({ ...item("Kapoor Builders", ["DEMO-001"]), destination: "local" });
   assert.equal(local.status, "skipped_duplicate");
   assert.equal(gmailCalls(), 1);
@@ -137,8 +140,10 @@ test("batch: several customers in one run, per-item status, one run id, failures
   assert.equal(r.sent, false);
   assert.deepEqual(r.results.map((x) => x.status), ["saved", "rejected", "saved", "skipped_duplicate", "skipped_duplicate"]);
   assert.deepEqual(r.counts, { saved: 2, rejected: 1, skipped_duplicate: 2 });
-  assert.equal(r.results[0].gmailMessageId, "m-d1");
-  assert.equal(r.results[2].gmailMessageId, "m-d2");
+  assert.equal(r.results[0].gmailMessageId, "0a1b2c3d4e5f6001");
+  assert.equal(r.results[0].gmailLink, "https://mail.google.com/mail/?authuser=me%40example.com#drafts?compose=0a1b2c3d4e5f6001");
+  assert.equal(log2Link(await readAudit()), "https://mail.google.com/mail/?authuser=me%40example.com#drafts?compose=0a1b2c3d4e5f6001", "link is in the audit log too");
+  assert.equal(r.results[2].gmailMessageId, "0a1b2c3d4e5f6002");
   assert.match(r.results[1].reason, /no email in Tally/);
   assert.equal(g.state.drafts.length, 2);
   assert.ok((await readAudit()).filter((e) => e.status !== "gmail_pending").every((e) => e.runId === r.runId));

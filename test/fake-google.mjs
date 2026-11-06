@@ -33,11 +33,14 @@ export async function startFakeGoogle() {
       if (state.rejectTokens.has(token)) return json(401, { error: { message: "Invalid Credentials", status: "UNAUTHENTICATED" } });
       if (state.gmailStatus !== 200) return json(state.gmailStatus, { error: { message: "Backend Error", errors: [{ reason: "backendError" }] } });
       const raw = Buffer.from(JSON.parse(body).message?.raw ?? JSON.parse(body).raw, "base64url").toString("utf8");
-      const id = `d${state.drafts.length + 1}`;
+      const n = state.drafts.length + 1;
+      const id = `d${n}`;
+      const mid = `0a1b2c3d4e5f60${String(n).padStart(2, "0")}`; // hex, like real Gmail ids
+      const tid = `1a1b2c3d4e5f60${String(n).padStart(2, "0")}`;
       state.drafts.push({ id, raw, path: url.pathname, labelIds: JSON.parse(body).labelIds });
       return url.pathname.endsWith("/drafts")
-        ? json(200, { id, message: { id: `m-${id}`, threadId: `t-${id}` } })
-        : json(200, { id: `m-${id}`, threadId: `t-${id}`, labelIds: ["DRAFT"] });
+        ? json(200, { id, message: { id: mid, threadId: tid } })
+        : json(200, { id: mid, threadId: tid, labelIds: ["DRAFT"] });
     }
     json(404, { error: "not found" });
   });

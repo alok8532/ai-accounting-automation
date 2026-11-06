@@ -29,7 +29,7 @@ Draft one reminder email per customer with overdue bills, using live Tally data,
    - `status: "rejected"` / `"error"` (single tool: "Draft not saved: …"): do not retry with changes to get around the check. Report the reason to the user.
    - `status: "not_processed"` with a Gmail reason (not connected / login expired): nothing was saved. Tell the user to run `npm run gmail:auth`, then ask whether to retry in Gmail or save locally instead — do not switch to local on your own.
    - `replacedTodaysDraft: true`: today's earlier local draft for this customer was overwritten. If `droppedBills` is not empty, tell the user those bills are no longer in any draft.
-6. Reply to the user with a summary table: Customer | Bills | Total due | Max days overdue | Tier | Result (Gmail draft saved / local file saved / skipped duplicate / not saved + reason). For Gmail, end with "The drafts are in your Gmail Drafts folder (<gmailAccount>) — review and send them from Gmail." After the table, list anything that needs a human decision (see "Flag for the user").
+6. Reply to the user with a summary table: Customer | Bills | Total due | Max days overdue | Tier | Result (Gmail draft saved / local file saved / skipped duplicate / not saved + reason). For a Gmail draft, make the result a link to it: `[Open draft](<gmailLink>)` — for a duplicate skipped because of an earlier Gmail draft, link that existing draft the same way (`duplicates[].gmailLink`). For Gmail, end with "The drafts are in your Gmail Drafts folder (<gmailAccount>) — review and send them from Gmail." After the table, list anything that needs a human decision (see "Flag for the user").
 
 If the user only wants to *see* drafts, show them in chat and ask before saving.
 

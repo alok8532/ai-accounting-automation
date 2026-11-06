@@ -22,7 +22,7 @@ Always say "Retainer" for these customers and invoices — never "recurring".
 5. Only after a clear yes: call `create_retainer_invoices` with the `approvalCode` from that preview (plus `period`/`customers` if the user limited it). Leave `destination` out to use the configured default; pass `"gmail"` or `"local"` only if the user asked for a specific place.
    - If it fails with "does not match the current data": something changed — preview again and ask again.
    - Never call it a second time to retry an invoice with status `error`, `unknown` or `created_unverified`. Report it.
-6. Report a result table: Customer | Bill ref | Tally voucher no. | Total | Invoice status | Draft (Gmail draft saved / local file / not saved + reason).
+6. Report a result table: Customer | Bill ref | Tally voucher no. | Total | Invoice status | Draft (`[Open draft](<draft.gmailLink>)` for a Gmail draft / local file / not saved + reason).
    - `unknown` or `created_unverified`: tell the user to check Tally's Day Book for that customer before doing anything else.
    - Draft `rejected` (no email) or `error`: once fixed, `save_invoice_drafts` creates the missing drafts (it never creates invoices).
    - End with: "Nothing was sent. Review the drafts and send them yourself."

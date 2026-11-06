@@ -63,6 +63,8 @@ With `REMINDER_DRAFT_DESTINATION=gmail` in `.env`, drafts go to Gmail by default
 Without it the default is local `.eml` files in `drafts/`. Either can be asked for explicitly
 ("…save them as local files" / "…in Gmail drafts"). Restart Claude after changing `.env`.
 
+Each saved Gmail draft comes with a link (`gmailLink`) that opens it directly in Gmail's compose window; the link is also stored in the audit log. (With the `gmail.insert` permission Gmail gives a message id, not a draft id; the link uses it. `npm run gmail:test-draft` prints one to try.)
+
 Each run returns a `runId` and, per customer: `saved` (with `gmailMessageId`), `skipped_duplicate`,
 `rejected`, `error` or `not_processed` — with the reason.
 
