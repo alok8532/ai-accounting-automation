@@ -8,6 +8,10 @@
     "ageing": "node scripts/ageing-report.mjs",
     "probe": "node scripts/probe-tally.mjs",
     "seed": "node scripts/seed-demo-data.mjs",
+    "gmail:auth": "node scripts/gmail.mjs auth",
+    "gmail:status": "node scripts/gmail.mjs status",
+    "gmail:test-draft": "node scripts/gmail.mjs test-draft",
+    "gmail:revoke": "node scripts/gmail.mjs revoke",
     "test": "node --test \"test/*.test.mjs\""
   },
   "type": "module",

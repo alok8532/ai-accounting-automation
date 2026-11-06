@@ -1,6 +1,7 @@
 // Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
 // Tally access is READ-ONLY: every Tally tool sends only Export requests — nothing is written to Tally.
-// The one write tool (save_reminder_draft) only saves a local draft email file and an audit log line.
+// The write tools (save_reminder_draft / save_reminder_drafts) only save draft emails (local file and,
+// if asked, a Gmail draft) plus an audit log line. Nothing can be sent.
 // Run: node mcp/tally-server.mjs   (normally launched by the MCP client via .mcp.json)
 // NOTE: stdout is the MCP protocol channel — log only to stderr.
 
@@ -12,7 +13,10 @@ import { field } from "../lib/receivables.mjs";
 import { receivablesView, ageingView } from "../lib/report.mjs";
 import { bucketLabels } from "../lib/ageing.mjs";
 import { CONFIG } from "../lib/config.mjs";
-import { createReminderDraft } from "../lib/reminders.mjs";
+import { createReminderDraft, createReminderDrafts, MAX_BATCH } from "../lib/reminders.mjs";
+import { loadDotEnv } from "../lib/env.mjs";
+
+loadDotEnv(); // GOOGLE_CLIENT_ID / _SECRET, GMAIL_SCOPE, REMINDER_DRAFT_DESTINATION from the git-ignored .env
 
 const server = new McpServer({ name: "tally", version: "0.1.0" });
 
@@ -127,28 +131,53 @@ tool("list_vouchers", {
     (!party || v.party.toLowerCase().includes(party.toLowerCase())));
 });
 
-// The only tool that writes — a local draft file plus an audit log line. Never writes to Tally, never sends.
+// The only tools that write: a local draft file (+ optionally a Gmail DRAFT) and an audit log line.
+// Never writes to Tally, never sends — this project has no email-sending code, and the Gmail client
+// can only create drafts (lib/gmail/client.mjs).
 // Checks are enforced in lib/reminders.mjs: recipient comes from the Tally ledger, bills must be open,
 // duplicates within the cooldown are skipped, every attempt is audit-logged.
+const destination = z.enum(["local", "gmail"]).optional().describe(
+  `"local" = .eml file in drafts/ only. "gmail" = a draft in the connected Gmail account's Drafts folder, plus the ` +
+  `local .eml copy. Default: ${process.env.REMINDER_DRAFT_DESTINATION || "local"} (REMINDER_DRAFT_DESTINATION). Use "gmail" only when the user asks for Gmail drafts.`);
+const draftInput = {
+  customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
+  bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),
+  subject: z.string().min(1).max(200),
+  body: z.string().min(1).describe("Plain-text email body including signature (an HTML version is generated automatically)"),
+};
+const writeAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+
 server.registerTool("save_reminder_draft", {
   title: "Save reminder draft",
-  description: "Save one payment reminder email as a draft .eml file under drafts/<today>/<customer>.eml. " +
+  description: "Save ONE payment reminder email as a draft: a .eml file under drafts/<today>/<customer>.eml and, with " +
+    "destination \"gmail\", also a draft in the user's Gmail Drafts folder. " +
     "The recipient is taken from the customer's ledger email in Tally (you cannot set it). " +
     "Every bill listed must be an open receivable of that customer and be mentioned in the body. " +
-    "Bills already drafted in the last few days are skipped (status skipped_duplicate) — do not retry those. " +
-    "Does NOT send the email and does NOT change Tally.",
-  inputSchema: {
-    customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
-    bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),
-    subject: z.string().min(1).max(200),
-    body: z.string().min(1).describe("Plain-text email body including signature"),
-  },
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    "Bills already drafted recently (or already in a Gmail draft today) are skipped (status skipped_duplicate) — do not retry those. " +
+    "For several customers prefer save_reminder_drafts. Does NOT send the email and does NOT change Tally.",
+  inputSchema: { ...draftInput, destination },
+  annotations: writeAnnotations,
 }, async (args) => {
   try {
     return ok(await createReminderDraft(args));
   } catch (e) {
     return { isError: true, content: [{ type: "text", text: `Draft not saved: ${e.message}` }] };
+  }
+});
+
+server.registerTool("save_reminder_drafts", {
+  title: "Save reminder drafts (several customers)",
+  description: `Save up to ${MAX_BATCH} payment reminder drafts in one run (one per customer), locally or in Gmail Drafts. ` +
+    "Same rules as save_reminder_draft for every item. Returns a runId, counts per status and one result per customer: " +
+    "saved (with gmailMessageId when in Gmail) | skipped_duplicate | rejected | error | not_processed, each with a reason. " +
+    "One failure does not stop the others. Does NOT send any email and does NOT change Tally.",
+  inputSchema: { drafts: z.array(z.object(draftInput)).min(1).max(MAX_BATCH), destination },
+  annotations: writeAnnotations,
+}, async (args) => {
+  try {
+    return ok(await createReminderDrafts(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `Drafts not saved: ${e.message}` }] };
   }
 });
 

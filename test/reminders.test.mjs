@@ -16,7 +16,7 @@ before(async () => {
     TALLY_URL: tally.url, DRAFTS_DIR: join(tmp, "drafts"), AUDIT_LOG: join(tmp, "logs", "audit.jsonl"),
     REMINDER_COOLDOWN_DAYS: "7",
     RECEIVABLES_CONFIG: fileURLToPath(new URL("./test-config.json", import.meta.url)),
-    HOLDS_FILE: join(tmp, "holds.json"),
+    HOLDS_FILE: join(tmp, "holds.json"), DOTENV_FILE: join(tmp, "no.env"),
   });
   ({ createReminderDraft } = await import("../lib/reminders.mjs"));
   ({ readAudit } = await import("../lib/audit.mjs"));
@@ -98,7 +98,7 @@ test("same bill within the cooldown is skipped as a duplicate", async () => {
   await draft("Kapoor Builders", ["DEMO-001"]);
   const r = await draft("Kapoor Builders", ["DEMO-001", "DEMO-009"], { now: at(2) });
   assert.equal(r.status, "skipped_duplicate");
-  assert.deepEqual(r.duplicates.map((d) => [d.bill, d.source]), [["DEMO-001", "audit log"]]);
+  assert.deepEqual(r.duplicates.map((d) => [d.bill, d.source]), [["DEMO-001", "local draft"]]);
   assert.equal((await readAudit()).at(-1).status, "skipped_duplicate");
 });
 

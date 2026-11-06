@@ -4,3 +4,7 @@ node_modules/
 logs/
 drafts/
 reports/
+.env.*
+!.env.example
+client_secret*.json
+*token*.json

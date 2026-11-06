@@ -21,7 +21,8 @@ async function connect(env) {
     command: process.execPath,
     args: [fileURLToPath(new URL("../mcp/tally-server.mjs", import.meta.url))],
     env: { ...process.env, TALLY_URL: tally.url, TALLY_COMPANY: "Demo Trading Co",
-      DRAFTS_DIR: join(tmp, "drafts"), AUDIT_LOG: join(tmp, "audit.jsonl"), HOLDS_FILE: join(tmp, "holds.json"), ...env },
+      DRAFTS_DIR: join(tmp, "drafts"), AUDIT_LOG: join(tmp, "audit.jsonl"), HOLDS_FILE: join(tmp, "holds.json"),
+      DOTENV_FILE: join(tmp, "no.env"), GMAIL_TOKEN_FILE: join(tmp, "no-token.json"), REMINDER_DRAFT_DESTINATION: "", ...env },
     stderr: "ignore",
   }));
   return c;
@@ -36,11 +37,13 @@ before(async () => {
 });
 after(async () => { await client?.close(); await tally.close(); await rm(tmp, { recursive: true, force: true }); });
 
-test("exposes exactly the expected tools; only save_reminder_draft is not read-only", async () => {
+test("exposes exactly the expected tools; only the draft-saving tools are not read-only; no send tool", async () => {
   const { tools } = await client.listTools();
+  const writers = ["save_reminder_draft", "save_reminder_drafts"];
   assert.deepEqual(tools.map((t) => t.name).sort(),
-    ["get_ageing_report", "get_receivables", "list_ledgers", "list_vouchers", "save_reminder_draft", "tally_status"]);
-  for (const t of tools) assert.equal(t.annotations.readOnlyHint, t.name !== "save_reminder_draft", t.name);
+    ["get_ageing_report", "get_receivables", "list_ledgers", "list_vouchers", "save_reminder_draft", "save_reminder_drafts", "tally_status"]);
+  for (const t of tools) assert.equal(t.annotations.readOnlyHint, !writers.includes(t.name), t.name);
+  assert.ok(tools.every((t) => !/send|reply|forward/i.test(t.name)));
 });
 
 test("tally_status", async () => {
@@ -127,6 +130,20 @@ test("save_reminder_draft saves; errors come back as tool errors", async () => {
     customer: "Kapoor Builders", bills: ["DEMO-002"], subject: "Reminder", body: "Invoice DEMO-002" });
   assert.equal(bad.isError, true);
   assert.match(bad.content[0].text, /^Draft not saved: Not open receivable bills/);
+});
+
+test("save_reminder_drafts: several customers, one result each; Gmail not connected -> not_processed", async () => {
+  const local = await call("save_reminder_drafts", { drafts: [
+    { customer: "Gupta Healthcare", bills: ["DEMO-005"], subject: "Reminder", body: "Invoice DEMO-005 is overdue." },
+    { customer: "Mehta Retail", bills: ["DEMO-004"], subject: "Reminder", body: "Invoice DEMO-004 is overdue." },
+  ] });
+  assert.equal(local.data.destination, "local");
+  assert.deepEqual(local.data.results.map((r) => r.status), ["saved", "rejected"]);
+  assert.match(local.data.results[1].reason, /no email in Tally/);
+  const gmail = await call("save_reminder_drafts", { destination: "gmail", drafts: [
+    { customer: "Kapoor Builders", bills: ["DEMO-009"], subject: "Reminder", body: "Invoice DEMO-009 is overdue." }] });
+  assert.equal(gmail.data.results[0].status, "not_processed");
+  assert.match(gmail.data.results[0].reason, /Gmail/);
 });
 
 test("nothing was ever written to Tally", () => {

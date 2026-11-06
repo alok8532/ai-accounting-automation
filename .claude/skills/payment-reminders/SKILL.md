@@ -1,6 +1,6 @@
 ---
 name: payment-reminders
-description: Draft payment reminder emails for customers with overdue bills in Tally. Use when the user asks to chase payments, follow up on overdue invoices/outstanding/receivables, send or draft reminders, or "who hasn't paid". Reads live data with the tally MCP tools and saves drafts for human review — never sends.
+description: Draft payment reminder emails for customers with overdue bills in Tally. Use when the user asks to chase payments, follow up on overdue invoices/outstanding/receivables, send or draft reminders, put reminders in Gmail drafts, or "who hasn't paid". Reads live data with the tally MCP tools and saves drafts for human review (local .eml files or the user's Gmail Drafts folder) — never sends.
 ---
 
 # Payment reminders
@@ -23,11 +23,13 @@ Draft one reminder email per customer with overdue bills, using live Tally data,
 2. Call `get_receivables` with `minOverdueDays: 1` (today's date is the default; past dates are refused by the tool — tell the user why if they ask for one). Apply any filter the user asked for (one customer, Retainer only, more than N days, above an amount → `minAmount`). If the result has `billsWithIssues` (bills whose due date can't be worked out), do not draft for those bills — list them under "Flag for the user".
 3. **Use `customers` to decide who gets an email.** Draft only for customers with `reminder.eligible: true`, and include exactly the bills in `reminder.bills`. For every other customer, report `reminder.reason` (on hold, credits cover the dues, email missing, below threshold…) — do not draft. One email per customer; the tier is decided by their **oldest** bill in `reminder.bills`.
 4. Pick the tier and tone using the rules below, then write the email from the matching template.
-5. Save each email with `save_reminder_draft`. Pass `customer` (exact ledger name), `bills` (the bill numbers in that email), `subject` and `body`. You do not pass an email address: the tool takes it from the customer's Tally ledger.
-   - `status: "skipped_duplicate"`: these bills were already drafted recently. Do not retry and do not change the bill list to get around it. Report it to the user.
-   - Error ("Draft not saved: …"): do not retry with changes to get around the check. Report the reason to the user.
-   - `replacedTodaysDraft: true`: today's earlier draft for this customer was overwritten. If `droppedBills` is not empty, tell the user those bills are no longer in any draft.
-6. Reply to the user with a summary table: Customer | Bills | Total due | Max days overdue | Tier | Result (saved file / skipped duplicate / not saved + reason). After the table, list anything that needs a human decision (see "Flag for the user").
+5. Save all the emails in one call with `save_reminder_drafts` (`drafts`: one item per customer with `customer` (exact ledger name), `bills` (the bill numbers in that email), `subject`, `body` (plain text — the tool builds the HTML version itself)). For a single customer, `save_reminder_draft` with the same fields also works. You do not pass an email address: the tool takes it from the customer's Tally ledger.
+   - **Where to save (`destination`)**: `"gmail"` when the user asks for Gmail / Gmail drafts — the draft goes into their Gmail Drafts folder (plus a local .eml copy). Otherwise leave `destination` out (default: local .eml files). Never say an email was sent: these are drafts the user reviews and sends from Gmail themselves.
+   - `status: "skipped_duplicate"`: these bills were already drafted recently (or are already in a Gmail draft today). Do not retry and do not change the bill list to get around it. Report it to the user. If the source is `unconfirmed gmail attempt`, ask the user to check their Gmail Drafts folder.
+   - `status: "rejected"` / `"error"` (single tool: "Draft not saved: …"): do not retry with changes to get around the check. Report the reason to the user.
+   - `status: "not_processed"` with a Gmail reason (not connected / login expired): nothing was saved. Tell the user to run `npm run gmail:auth`, then ask whether to retry in Gmail or save locally instead — do not switch to local on your own.
+   - `replacedTodaysDraft: true`: today's earlier local draft for this customer was overwritten. If `droppedBills` is not empty, tell the user those bills are no longer in any draft.
+6. Reply to the user with a summary table: Customer | Bills | Total due | Max days overdue | Tier | Result (Gmail draft saved / local file saved / skipped duplicate / not saved + reason). For Gmail, end with "The drafts are in your Gmail Drafts folder (<gmailAccount>) — review and send them from Gmail." After the table, list anything that needs a human decision (see "Flag for the user").
 
 If the user only wants to *see* drafts, show them in chat and ask before saving.
 
