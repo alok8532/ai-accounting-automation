@@ -12,6 +12,7 @@
     "gmail:status": "node scripts/gmail.mjs status",
     "gmail:test-draft": "node scripts/gmail.mjs test-draft",
     "gmail:revoke": "node scripts/gmail.mjs revoke",
+    "invoices:preview": "node scripts/retainer-invoices.mjs",
     "test": "node --test \"test/*.test.mjs\""
   },
   "type": "module",

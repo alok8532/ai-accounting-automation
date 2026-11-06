@@ -22,7 +22,8 @@ async function connect(env) {
     args: [fileURLToPath(new URL("../mcp/tally-server.mjs", import.meta.url))],
     env: { ...process.env, TALLY_URL: tally.url, TALLY_COMPANY: "Demo Trading Co",
       DRAFTS_DIR: join(tmp, "drafts"), AUDIT_LOG: join(tmp, "audit.jsonl"), HOLDS_FILE: join(tmp, "holds.json"),
-      DOTENV_FILE: join(tmp, "no.env"), GMAIL_TOKEN_FILE: join(tmp, "no-token.json"), REMINDER_DRAFT_DESTINATION: "", ...env },
+      DOTENV_FILE: join(tmp, "no.env"), GMAIL_TOKEN_FILE: join(tmp, "no-token.json"), REMINDER_DRAFT_DESTINATION: "",
+      INVOICE_WRITE_ENABLED: "", INVOICES_DIR: join(tmp, "invoices"), ...env },
     stderr: "ignore",
   }));
   return c;
@@ -37,13 +38,23 @@ before(async () => {
 });
 after(async () => { await client?.close(); await tally.close(); await rm(tmp, { recursive: true, force: true }); });
 
-test("exposes exactly the expected tools; only the draft-saving tools are not read-only; no send tool", async () => {
+test("exposes exactly the expected tools; only the draft/invoice tools are not read-only; no send tool", async () => {
   const { tools } = await client.listTools();
-  const writers = ["save_reminder_draft", "save_reminder_drafts"];
+  const writers = ["save_reminder_draft", "save_reminder_drafts", "create_retainer_invoices", "save_invoice_drafts"];
   assert.deepEqual(tools.map((t) => t.name).sort(),
-    ["get_ageing_report", "get_receivables", "list_ledgers", "list_vouchers", "save_reminder_draft", "save_reminder_drafts", "tally_status"]);
+    ["create_retainer_invoices", "get_ageing_report", "get_receivables", "list_ledgers", "list_vouchers", "preview_retainer_invoices",
+      "save_invoice_drafts", "save_reminder_draft", "save_reminder_drafts", "tally_status"]);
   for (const t of tools) assert.equal(t.annotations.readOnlyHint, !writers.includes(t.name), t.name);
   assert.ok(tools.every((t) => !/send|reply|forward/i.test(t.name)));
+});
+
+test("Retainer invoices over MCP: preview works; create is refused while writing is switched off", async () => {
+  const p = await call("preview_retainer_invoices", {});
+  assert.equal(p.data.counts.ready, 3);
+  assert.equal(p.data.writeEnabled, false);
+  const c = await call("create_retainer_invoices", { approvalCode: p.data.approvalCode });
+  assert.equal(c.isError, true);
+  assert.match(c.content[0].text, /^No invoices created: Invoice creation is switched off/);
 });
 
 test("tally_status", async () => {

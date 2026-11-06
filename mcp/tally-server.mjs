@@ -1,7 +1,9 @@
 // Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
-// Tally access is READ-ONLY: every Tally tool sends only Export requests — nothing is written to Tally.
-// The write tools (save_reminder_draft / save_reminder_drafts) only save draft emails (local file and,
-// if asked, a Gmail draft) plus an audit log line. Nothing can be sent.
+// Tally access is READ-ONLY except ONE narrowly scoped write: create_retainer_invoices (Sales vouchers for
+// Retainer customers, only from a confirmed preview, only when INVOICE_WRITE_ENABLED=true, only in the
+// configured company — rules in lib/retainer-invoices.mjs). No other tool writes to Tally.
+// The draft tools only save draft emails (local file and, if asked, a Gmail draft) plus an audit log line.
+// Nothing can be sent.
 // Run: node mcp/tally-server.mjs   (normally launched by the MCP client via .mcp.json)
 // NOTE: stdout is the MCP protocol channel — log only to stderr.
 
@@ -15,6 +17,7 @@ import { bucketLabels } from "../lib/ageing.mjs";
 import { CONFIG } from "../lib/config.mjs";
 import { createReminderDraft, createReminderDrafts, MAX_BATCH } from "../lib/reminders.mjs";
 import { loadDotEnv } from "../lib/env.mjs";
+import { previewRetainerInvoices, createRetainerInvoices, saveInvoiceDrafts } from "../lib/retainer-invoices.mjs";
 
 loadDotEnv(); // GOOGLE_CLIENT_ID / _SECRET, GMAIL_SCOPE, REMINDER_DRAFT_DESTINATION from the git-ignored .env
 
@@ -176,6 +179,56 @@ server.registerTool("save_reminder_drafts", {
 }, async (args) => {
   try {
     return ok(await createReminderDrafts(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `Drafts not saved: ${e.message}` }] };
+  }
+});
+
+// ---------- Monthly Retainer invoices (proposal Workflow A) ----------
+const period = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Use YYYY-MM").optional()
+  .describe("Billing month YYYY-MM. Default: the current month (India time).");
+const invoiceCustomers = z.array(z.string().min(1)).optional()
+  .describe("Only these Retainer customers (exact ledger names). Default: every customer that is ready.");
+
+tool("preview_retainer_invoices", {
+  title: "Preview Retainer invoices",
+  description: "READ-ONLY. Lists the monthly Retainer invoices that would be created in Tally for a billing month: " +
+    "customer, bill reference, fee, CGST/SGST, total, invoice date, due date, recipient, and a status per customer " +
+    "(ready | already_invoiced | blocked | needs_setup) with issues/notes. Returns an approvalCode for the ready " +
+    "invoices. Show this preview to the user before anything is created.",
+  inputSchema: { period },
+}, (args) => previewRetainerInvoices(args));
+
+server.registerTool("create_retainer_invoices", {
+  title: "Create Retainer invoices in Tally",
+  description: "WRITES TO TALLY: creates the Sales vouchers shown in preview_retainer_invoices, then exports each " +
+    "invoice PDF and saves an email draft with the PDF attached (never sent). ONLY call this after you showed the " +
+    "preview to the user and they explicitly confirmed it in this conversation; pass the approvalCode from that " +
+    "preview. The tool re-checks everything and refuses if anything changed, if writing is switched off, or for a " +
+    "duplicate month. Never call it again to retry a failed or unclear invoice — report it to the user instead.",
+  inputSchema: {
+    approvalCode: z.string().regex(/^INV-[0-9A-F]{8}$/).describe("approvalCode from the preview the user confirmed"),
+    period, customers: invoiceCustomers, destination,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+}, async (args) => {
+  try {
+    return ok(await createRetainerInvoices(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `No invoices created: ${e.message}` }] };
+  }
+});
+
+server.registerTool("save_invoice_drafts", {
+  title: "Save invoice email drafts",
+  description: "For Retainer invoices ALREADY created by create_retainer_invoices in a month: export the invoice PDF " +
+    "from Tally (read-only) and save the email draft with the PDF attached, for invoices that have no draft yet " +
+    "(e.g. the email was missing or Gmail was not connected). Does not create invoices, does not send.",
+  inputSchema: { period, customers: invoiceCustomers, destination },
+  annotations: writeAnnotations,
+}, async (args) => {
+  try {
+    return ok(await saveInvoiceDrafts(args));
   } catch (e) {
     return { isError: true, content: [{ type: "text", text: `Drafts not saved: ${e.message}` }] };
   }

@@ -1,6 +1,9 @@
 // A tiny fake TallyPrime HTTP server for tests: answers the inline-TDL collection Export requests
 // our code sends (Company, Group, Ledger, Bill, Voucher) with XML in the same shape TallyPrime returns.
-// No real Tally, no network beyond 127.0.0.1. Import (write) requests are refused.
+// No real Tally, no network beyond 127.0.0.1. Import (write) requests are refused unless
+// startFakeTally({ allowImport: true }): then Sales vouchers are stored like Tally would (state.importMode
+// "ok" | "reject" | "fail" (HTTP 500) | "phantom" (says created, stores nothing)). The "Printed Invoice"
+// HTML export answers with a small fake invoice page.
 
 import { createServer } from "node:http";
 
@@ -34,6 +37,9 @@ export function demoState() {
       { name: "A & B Traders", parent: "Sundry Debtors", email: "ab@ab.example.com" },
       { name: "A-B Traders", parent: "Sundry Debtors", email: "ab2@ab.example.com" },
       { name: "Paper Supplier", parent: "Sundry Creditors", email: "sales@paper.example.com" },
+      { name: "Consulting Income", parent: "Sales Accounts" },
+      { name: "Output CGST 9%", parent: "Duties & Taxes" },
+      { name: "Output SGST 9%", parent: "Duties & Taxes" },
     ],
     // p: credit period on the bill (BILLDUEDATE P attribute).
     bills: [
@@ -82,17 +88,45 @@ function voucherXml(v) {
   const tag = v.invoice ? "LEDGERENTRIES" : "ALLLEDGERENTRIES"; // item invoices use LEDGERENTRIES.LIST
   const entries = v.allocs.map(([ledger, bill, amt]) => `<${tag}.LIST><LEDGERNAME>${x(ledger)}</LEDGERNAME>` +
     `<AMOUNT>${amt.toFixed(2)}</AMOUNT><BILLALLOCATIONS.LIST><NAME>${x(bill)}</NAME><BILLTYPE>x</BILLTYPE>` +
-    `<AMOUNT>${amt.toFixed(2)}</AMOUNT></BILLALLOCATIONS.LIST></${tag}.LIST>`).join("");
+    `<AMOUNT>${amt.toFixed(2)}</AMOUNT></BILLALLOCATIONS.LIST></${tag}.LIST>`).join("") +
+    (v.other ?? []).map(([ledger, amt]) => `<${tag}.LIST><LEDGERNAME>${x(ledger)}</LEDGERNAME><AMOUNT>${amt.toFixed(2)}</AMOUNT></${tag}.LIST>`).join("");
   return `<VOUCHER REMOTEID="r" VCHTYPE="${x(v.type)}"><DATE TYPE="Date">${v.date.replaceAll("-", "")}</DATE>` +
+    (v.narration ? `<NARRATION TYPE="String">${x(v.narration)}</NARRATION>` : "") +
     `<VOUCHERTYPENAME>${x(v.type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${x(v.number)}</VOUCHERNUMBER>` +
-    `<PARTYLEDGERNAME>${x(v.allocs[0][0])}</PARTYLEDGERNAME>${entries}</VOUCHER>`;
+    `<PARTYLEDGERNAME>${x(v.allocs[0][0])}</PARTYLEDGERNAME>` +
+    (v.masterId ? `<MASTERID TYPE="Number"> ${v.masterId}</MASTERID>` : "") + `${entries}</VOUCHER>`;
+}
+
+const un = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+const tagv = (b, t) => un((b.match(new RegExp(`<${t}>([^<]*)</${t}>`)) ?? [])[1] ?? "");
+
+// Import of Sales vouchers, stored the way the Export side returns them.
+function importVouchers(body, state) {
+  if (state.importMode === "reject") return { created: 0, errors: 1, lineErrors: ["Voucher totals do not match!"] };
+  const vouchers = [...body.matchAll(/<VOUCHER [\s\S]*?<\/VOUCHER>/g)].map(([v]) => v);
+  state.imports.push(...vouchers);
+  if (state.importMode === "phantom") return { created: vouchers.length, errors: 0, lineErrors: [] };
+  for (const v of vouchers) {
+    const entries = [...v.matchAll(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g)].map(([e]) => e);
+    const party = tagv(v, "PARTYLEDGERNAME");
+    const pe = entries.find((e) => tagv(e, "LEDGERNAME") === party);
+    const bill = tagv(pe, "NAME");
+    const amount = Number(tagv(pe, "AMOUNT"));
+    const date = tagv(v, "DATE").replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3");
+    state.vouchers.push({ date, type: tagv(v, "VOUCHERTYPENAME"), number: String(state.nextVoucherNumber++),
+      narration: tagv(v, "NARRATION"), masterId: state.nextMasterId++, allocs: [[party, bill, amount]],
+      other: entries.filter((e) => e !== pe).map((e) => [tagv(e, "LEDGERNAME"), Number(tagv(e, "AMOUNT"))]) });
+    state.bills.push({ name: bill, party, date, p: (v.match(/<BILLCREDITPERIOD[^>]*P="([^"]*)"/) ?? [])[1] ?? "", balance: amount });
+  }
+  return { created: vouchers.length, errors: 0, lineErrors: [] };
 }
 
 const envelope = (inner) => `<ENVELOPE><BODY><DESC></DESC><DATA><COLLECTION>${inner}</COLLECTION></DATA></BODY></ENVELOPE>`;
 
 // Starts the fake server. Returns { url, state, requests, close }.
 // opts.hang = true: accept connections but never answer (for timeout tests).
-export async function startFakeTally({ state = demoState(), hang = false } = {}) {
+export async function startFakeTally({ state = demoState(), hang = false, allowImport = false } = {}) {
+  Object.assign(state, { importMode: "ok", imports: [], nextVoucherNumber: 21, nextMasterId: 100, ...state });
   const requests = [];
   const server = createServer((req, res) => {
     let body = "";
@@ -101,7 +135,20 @@ export async function startFakeTally({ state = demoState(), hang = false } = {})
       if (hang) return;
       requests.push(body);
       if (req.method === "GET") return res.end("<RESPONSE>TallyPrime Server is Running</RESPONSE>");
-      if (/<TALLYREQUEST>\s*Import/i.test(body)) { res.statusCode = 403; return res.end("writes not allowed in tests"); }
+      if (/<TALLYREQUEST>\s*Import/i.test(body)) {
+        if (!allowImport) { res.statusCode = 403; return res.end("writes not allowed in tests"); }
+        if (state.importMode === "fail") { res.statusCode = 500; return res.end("Tally crashed"); }
+        const r = importVouchers(body, state);
+        return res.end(`<RESPONSE><CREATED>${r.created}</CREATED><ALTERED>0</ALTERED><ERRORS>${r.errors}</ERRORS>` +
+          r.lineErrors.map((l) => `<LINEERROR>${x(l)}</LINEERROR>`).join("") + "</RESPONSE>");
+      }
+      if (/<USE>Printed Invoice<\/USE>/.test(body)) {
+        const id = body.match(/ID:(\d+)/)?.[1];
+        const v = state.vouchers.find((q) => String(q.masterId) === id);
+        if (!v) return res.end("<ENVELOPE><LINEERROR>Voucher not found</LINEERROR></ENVELOPE>");
+        return res.end(`<HTML charset="utf-16"><HEAD></HEAD><BODY><TABLE bgcolor="#2a67b1"><TR><TH>Accounting Voucher Display</TH></TR></TABLE>` +
+          `<P>Invoice ${x(v.number)} for ${x(v.allocs[0][0])} total ${(-v.allocs[0][2]).toFixed(2)}</P></BODY></HTML>`);
+      }
       const type = body.match(/<TYPE>(\w+)<\/TYPE>\s*(<NATIVEMETHOD|<\/COLLECTION)/)?.[1];
       const items = {
         Company: () => [`<COMPANY NAME="${x(state.company)}"></COMPANY>`],
