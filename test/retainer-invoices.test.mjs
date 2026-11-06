@@ -267,6 +267,8 @@ test("Gmail destination: draft in Gmail with the invoice PDF attached, never sen
   assert.equal(d.status, "saved");
   assert.equal(d.gmailMessageId, "m-d1");
   const raw = g.state.drafts[0].raw;
+  assert.equal(d.file, undefined, "no local .eml for a Gmail draft");
+  assert.ok(!existsSync(join(tmp, "drafts")));
   assert.deepEqual(g.state.drafts[0].labelIds, ["DRAFT"]);
   assert.match(raw, /^To: finance@gupta-health\.example\.com\r\n/);
   assert.match(raw, /Content-Type: application\/pdf; name="Invoice RET-\d{4}-\d{2}-GUPTA\.pdf"/);

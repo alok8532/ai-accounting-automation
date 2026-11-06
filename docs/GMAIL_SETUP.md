@@ -1,7 +1,8 @@
 # Gmail drafts — setup and use (POC)
 
-Payment reminder drafts can be saved straight into a Gmail account's **Drafts** folder, in addition to
-the local `.eml` files. **Nothing is ever sent.** A person opens Gmail, reviews each draft and sends it.
+Payment reminder and Retainer invoice drafts are saved straight into a Gmail account's **Drafts** folder
+(or, as an alternative, as local `.eml` files). **Nothing is ever sent.** A person opens Gmail, reviews each
+draft and sends it.
 
 Gmail is the development/demo provider. The client proposal targets Zoho Mail for production; only
 `lib/gmail/` is Gmail-specific, the reminder rules in `lib/reminders.mjs` stay the same.
@@ -58,9 +59,9 @@ Use it only if `insert` stops working.
 ## Using it
 
 In Claude: *"Draft payment reminders for overdue customers and save them in Gmail drafts."*
-The payment-reminders skill calls `save_reminder_drafts` with `destination: "gmail"`. Without "Gmail"
-the drafts are saved locally only (default). To make Gmail the default, add
-`REMINDER_DRAFT_DESTINATION=gmail` to `.env` and restart Claude.
+With `REMINDER_DRAFT_DESTINATION=gmail` in `.env`, drafts go to Gmail by default (no local copy is made).
+Without it the default is local `.eml` files in `drafts/`. Either can be asked for explicitly
+("…save them as local files" / "…in Gmail drafts"). Restart Claude after changing `.env`.
 
 Each run returns a `runId` and, per customer: `saved` (with `gmailMessageId`), `skipped_duplicate`,
 `rejected`, `error` or `not_processed` — with the reason.

@@ -19,7 +19,7 @@ Always say "Retainer" for these customers and invoices — never "recurring".
    - `already_invoiced`: say which voucher already exists (`existing`). `needs_setup`: the agreed fee etc. is missing in `config/retainer-billing.json` — the accountant must add it; never suggest an amount yourself.
    - If `writeEnabled` is false, say that invoice creation is switched off (`INVOICE_WRITE_ENABLED=true` in `.env`, after a Tally backup) and stop after the preview.
 4. **Ask for confirmation**: "Shall I create these N invoices in Tally (company …) for <month>, total ₹…? Drafts will be saved in <Gmail / local files>." Wait for an explicit yes in the conversation. If the user changes anything (amount, customer), do not edit values yourself — the change has to be made in Tally or the config, then preview again.
-5. Only after a clear yes: call `create_retainer_invoices` with the `approvalCode` from that preview (plus `period`/`customers` if the user limited it). `destination: "gmail"` if the user wants the drafts in Gmail, otherwise leave it out (local .eml).
+5. Only after a clear yes: call `create_retainer_invoices` with the `approvalCode` from that preview (plus `period`/`customers` if the user limited it). Leave `destination` out to use the configured default; pass `"gmail"` or `"local"` only if the user asked for a specific place.
    - If it fails with "does not match the current data": something changed — preview again and ask again.
    - Never call it a second time to retry an invoice with status `error`, `unknown` or `created_unverified`. Report it.
 6. Report a result table: Customer | Bill ref | Tally voucher no. | Total | Invoice status | Draft (Gmail draft saved / local file / not saved + reason).

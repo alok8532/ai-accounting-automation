@@ -19,7 +19,7 @@ writes to Tally.
 | Failures | A "pending" audit line is written before each write. Tally error → `error` (safe to try again later). No clear answer → `unknown`: blocked for 10 minutes, then allowed only if Tally shows no such invoice. Created but cannot be read back / total differs → `created_unverified`, blocked until checked. Nothing is ever retried automatically. |
 | Verification | After creating, the voucher is read back from Tally and its total compared with the preview. |
 | PDF | Tally's own **Printed Invoice** for that voucher, exported as HTML and printed to PDF with Microsoft Edge (headless) → `invoices/<month>/` (git-ignored). |
-| Email | Template in `config/retainer-billing.json` (`email.subject` / `email.body`), recipient from the Tally ledger. Local `.eml` in `drafts/<date>/`, or Gmail draft + local copy. One draft per invoice. |
+| Email | Template in `config/retainer-billing.json` (`email.subject` / `email.body`), recipient from the Tally ledger. Gmail draft, or a local `.eml` in `drafts/<date>/` (destination "local"). One draft per invoice. |
 
 ## Use
 

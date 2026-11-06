@@ -140,8 +140,9 @@ tool("list_vouchers", {
 // Checks are enforced in lib/reminders.mjs: recipient comes from the Tally ledger, bills must be open,
 // duplicates within the cooldown are skipped, every attempt is audit-logged.
 const destination = z.enum(["local", "gmail"]).optional().describe(
-  `"local" = .eml file in drafts/ only. "gmail" = a draft in the connected Gmail account's Drafts folder, plus the ` +
-  `local .eml copy. Default: ${process.env.REMINDER_DRAFT_DESTINATION || "local"} (REMINDER_DRAFT_DESTINATION). Use "gmail" only when the user asks for Gmail drafts.`);
+  `"gmail" = a draft in the connected Gmail account's Drafts folder. "local" = an .eml file in the project's drafts/ ` +
+  `folder instead. Default: "${process.env.REMINDER_DRAFT_DESTINATION || "local"}" (REMINDER_DRAFT_DESTINATION). Leave it out ` +
+  `unless the user asks for a specific place.`);
 const draftInput = {
   customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
   bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),

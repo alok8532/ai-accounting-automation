@@ -45,13 +45,14 @@ const item = (customer, bills) => ({ customer, bills, subject: `Payment reminder
 const gmailDraft = (customer, bills, extra = {}) => R.createReminderDraft({ ...item(customer, bills), destination: "gmail", ...extra });
 const gmailCalls = () => g.state.requests.filter((q) => q.path.startsWith("/gmail/")).length;
 
-test("gmail destination: Gmail draft + local copy, recipient from Tally, ids returned, never sent", async () => {
+test("gmail destination: Gmail draft only (no local file), recipient from Tally, ids returned, never sent", async () => {
   const r = await gmailDraft("Kapoor Builders", ["DEMO-001"]);
   assert.equal(r.status, "saved");
   assert.equal(r.sent, false);
   assert.equal(r.destination, "gmail");
   assert.deepEqual(r.gmail, { messageId: "m-d1", draftId: null, threadId: "t-d1", mode: "insert", account: "me@example.com" });
-  assert.match(await readFile(r.file, "utf8"), /^To: accounts@kapoor-builders\.example\.com/);
+  assert.equal(r.file, undefined);
+  await assert.rejects(readFile(join(tmp, "drafts"), "utf8"), "no local drafts folder is created");
   const raw = g.state.drafts[0].raw;
   assert.match(raw, /^To: accounts@kapoor-builders\.example\.com\r\n/);
   assert.deepEqual(g.state.drafts[0].labelIds, ["DRAFT"]);
