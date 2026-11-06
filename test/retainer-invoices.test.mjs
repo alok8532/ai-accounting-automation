@@ -180,6 +180,28 @@ test("email draft text: template filled with Indian formats", async () => {
   assert.match(text, /Invoice RET\/\d{4}-\d{2}\/GUPTA \| Dated 01-[A-Z][a-z]{2}-\d{4} \| Due \d{2}-[A-Z][a-z]{2}-\d{4} \| Amount ₹47,200/);
 });
 
+test("audit trail: approval code, criteria and refusals are recorded (no email bodies)", async () => {
+  const code = (await preview()).approvalCode;
+  await assert.rejects(R.createRetainerInvoices({ approvalCode: "INV-00000000" }), /does not match/);
+  process.env.INVOICE_WRITE_ENABLED = "false";
+  await assert.rejects(R.createRetainerInvoices({ approvalCode: code }), /switched off/);
+  process.env.INVOICE_WRITE_ENABLED = "true";
+  const r = await R.createRetainerInvoices({ approvalCode: code, customers: ["Sharma Exports Pvt Ltd"] });
+  const runs = (await readAudit()).filter((e) => e.action === "retainer_invoice_run");
+  assert.deepEqual(runs.map((e) => e.status), ["refused", "refused", "approved"]);
+  assert.equal(runs[0].approvalCode, "INV-00000000");
+  assert.match(runs[1].reason, /switched off/);
+  const ok = runs[2];
+  assert.equal(ok.approvalCode, code);
+  assert.equal(ok.runId, r.runId);
+  assert.ok(ok.user, "who ran it");
+  assert.deepEqual(ok.customers, ["Sharma Exports Pvt Ltd"]);
+  assert.deepEqual([ok.invoiceCount, ok.total, ok.company], [1, 29500, "Demo Trading Co"]);
+  assert.equal(ok.invoices[0], `RET/${period()}/SHARMA`);
+  const inv = (await readAudit()).filter((e) => e.action === "retainer_invoice");
+  assert.ok(inv.length >= 2 && inv.every((e) => e.approvalCode === code && e.runId === r.runId), "every invoice entry carries the approval code");
+});
+
 test("duplicate: a second run creates nothing (already_invoiced via the Tally tag), no approval code", async () => {
   await create();
   const p = await preview();
