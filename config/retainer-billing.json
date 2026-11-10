@@ -1,0 +1,29 @@
+{
+  "_readme": "Monthly Retainer invoice rules (docs/RETAINER_INVOICES.md). Change values here, not in code. Customers are picked by the Tally group in config/receivables.json (retainerGroup); this file only holds the agreed billing terms.",
+  "_status": "DEMO VALUES for the 'Demo Trading Co' test company. Accounting must confirm fee, description, ledgers, GST and wording before real use.",
+
+  "writeCompany": "Demo Trading Co",
+  "voucherType": "Sales",
+  "invoiceDay": 1,
+  "allowedInvoiceDays": [1, 2, 31],
+  "_allowedInvoiceDays": "TallyPrime EDU (educational) mode only accepts voucher dates on the 1st, 2nd and 31st. Use [] with a licensed Tally.",
+  "billRefPrefix": "RET",
+
+  "gst": {
+    "cgstLedger": "Output CGST 9%",
+    "sgstLedger": "Output SGST 9%",
+    "cgstRate": 9,
+    "sgstRate": 9
+  },
+
+  "customers": {
+    "Sharma Exports Pvt Ltd": { "code": "SHARMA", "monthlyFee": 25000, "description": "Retainer fee", "incomeLedger": "Consulting Income" },
+    "Gupta Healthcare": { "code": "GUPTA", "monthlyFee": 40000, "description": "Retainer fee", "incomeLedger": "Consulting Income" },
+    "Verma Textiles": { "code": "VERMA", "monthlyFee": 15000, "description": "Retainer fee", "incomeLedger": "Consulting Income" }
+  },
+
+  "email": {
+    "subject": "Invoice {billRef} – Retainer fee for {periodName} – {total}",
+    "body": "Dear {customer} Accounts Team,\n\nPlease find attached our invoice for the Retainer fee for {periodName}.\n\nInvoice {billRef} | Dated {invoiceDate} | Due {dueDate} | Amount {total}\n\nKindly arrange the payment by the due date. If you have any query on this invoice, please let us know.\n\nRegards,\nAccounts Team\nShauryam Solutions Pvt. Ltd."
+  }
+}

@@ -16,7 +16,7 @@ if (COMPANY !== "Demo Trading Co") {
 }
 
 // ---------- Demo data ----------
-// Retainer customers live in their own sub-group. That group IS the "recurring customer
+// Retainer customers live in their own sub-group. That group IS the "Retainer customer
 // marker" from the proposal: visible in Tally, set by accountants, no guessing from names.
 const RETAINER_GROUP = "Retainer Customers";
 
@@ -51,10 +51,20 @@ const sales = [
   { id: "DEMO-010", date: "20261102", party: "Mehta Retail",           amount:  8000, note: "POS consulting - follow-up" },
 ];
 
-// Receipts against specific bills: one full payment, one partial payment.
+// Receipts: one full payment, one partial payment (both "Agst Ref" = against a bill),
+// one advance (new "Advance" reference, adjusted later) and one "On Account" receipt (not linked to any bill).
 const receipts = [
   { id: "DEMO-R01", date: "20260901", party: "Sharma Exports Pvt Ltd", bill: "DEMO-003", amount: 29500, note: "Full payment" },
   { id: "DEMO-R02", date: "20260801", party: "Singh Logistics",        bill: "DEMO-002", amount: 30000, note: "Part payment" },
+  { id: "DEMO-R03", date: "20261101", party: "Mehta Retail",           bill: "ADV-MEHTA-01", type: "Advance", amount: 5000, note: "Advance received" },
+  { id: "DEMO-R04", date: "20261101", party: "Verma Textiles",         type: "On Account", amount: 20000, note: "Payment received, bill not specified" },
+];
+
+// Credit notes (voucher type "Credit Note"): one adjusted against a bill, one left as a new credit reference.
+// amount = taxable value; 9% CGST + 9% SGST reversed on top.
+const creditNotes = [
+  { id: "DEMO-CN1", date: "20261102", party: "Kapoor Builders",  bill: "DEMO-009",     type: "Agst Ref", amount: 5000, note: "Rate difference on DEMO-009" },
+  { id: "DEMO-CN2", date: "20261101", party: "Gupta Healthcare", bill: "CN-GUPTA-01",  type: "New Ref",  amount: 2000, note: "Service credit - not yet adjusted" },
 ];
 
 // ---------- Helpers ----------
@@ -86,7 +96,7 @@ const tallyJD = (yyyymmdd) => {
 // Without the P attribute Tally silently stores due date = bill date (breaks ageing).
 const billAlloc = (name, type, amount, creditDays, billDate) => `
     <BILLALLOCATIONS.LIST>
-      <NAME>${esc(name)}</NAME><BILLTYPE>${type}</BILLTYPE>
+      ${name ? `<NAME>${esc(name)}</NAME>` : ""}<BILLTYPE>${type}</BILLTYPE>
       ${creditDays ? `<BILLCREDITPERIOD JD="${tallyJD(billDate)}" P="${creditDays} Days">${creditDays} Days</BILLCREDITPERIOD>` : ""}
       <AMOUNT>${amount}</AMOUNT>
     </BILLALLOCATIONS.LIST>`;
@@ -114,10 +124,27 @@ function receiptVoucher(r) {
   <DATE>${r.date}</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
   <VOUCHERNUMBER>${r.id}</VOUCHERNUMBER>
   <PARTYLEDGERNAME>${esc(r.party)}</PARTYLEDGERNAME>
-  <NARRATION>${esc(r.note)} against ${r.bill} [seed:${r.id}]</NARRATION>
+  <NARRATION>${esc(r.note)}${r.bill ? ` - ${r.bill}` : ""} [seed:${r.id}]</NARRATION>
   <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
-  ${ledgerEntry(r.party, r.amount, billAlloc(r.bill, "Agst Ref", r.amount))}
+  ${ledgerEntry(r.party, r.amount, billAlloc(r.bill, r.type ?? "Agst Ref", r.amount))}
   ${ledgerEntry("HDFC Bank", -r.amount)}
+</VOUCHER>`;
+}
+
+// Credit note: customer credited (positive), income and output GST reversed (debited, negative).
+function creditNoteVoucher(c) {
+  const gst = Math.round(c.amount * 0.09);
+  const total = c.amount + 2 * gst;
+  return `<VOUCHER VCHTYPE="Credit Note" ACTION="Create" OBJVIEW="Accounting Voucher View">
+  <DATE>${c.date}</DATE><VOUCHERTYPENAME>Credit Note</VOUCHERTYPENAME>
+  <VOUCHERNUMBER>${c.id}</VOUCHERNUMBER>
+  <PARTYLEDGERNAME>${esc(c.party)}</PARTYLEDGERNAME>
+  <NARRATION>${esc(c.note)} [seed:${c.id}]</NARRATION>
+  <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
+  ${ledgerEntry(c.party, total, billAlloc(c.bill, c.type, total))}
+  ${ledgerEntry("Consulting Income", -c.amount)}
+  ${ledgerEntry("Output CGST 9%", -gst)}
+  ${ledgerEntry("Output SGST 9%", -gst)}
 </VOUCHER>`;
 }
 
@@ -168,6 +195,9 @@ async function main() {
   else console.log("  Sales: already seeded");
   if (todoReceipts.length) report(`Receipts (${todoReceipts.length})`, await importData("Vouchers", todoReceipts.map(receiptVoucher).join("")));
   else console.log("  Receipts: already seeded");
+  const todoCredits = creditNotes.filter((c) => !done.has(c.id));
+  if (todoCredits.length) report(`Credit notes (${todoCredits.length})`, await importData("Vouchers", todoCredits.map(creditNoteVoucher).join("")));
+  else console.log("  Credit notes: already seeded");
 
   console.log("Done.");
 }

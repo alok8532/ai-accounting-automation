@@ -3,3 +3,9 @@ node_modules/
 *.log
 logs/
 drafts/
+reports/
+.env.*
+!.env.example
+client_secret*.json
+*token*.json
+invoices/

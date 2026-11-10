@@ -1,15 +1,25 @@
 // Tally MCP server (stdio). Exposes TallyPrime data to Claude as tools.
-// Tally access is READ-ONLY: every Tally tool sends only Export requests — nothing is written to Tally.
-// The one write tool (save_reminder_draft) only saves a local draft email file and an audit log line.
+// Tally access is READ-ONLY except ONE narrowly scoped write: create_retainer_invoices (Sales vouchers for
+// Retainer customers, only from a confirmed preview, only when INVOICE_WRITE_ENABLED=true, only in the
+// configured company — rules in lib/retainer-invoices.mjs). No other tool writes to Tally.
+// The draft tools only save draft emails (local file and, if asked, a Gmail draft) plus an audit log line.
+// Nothing can be sent.
 // Run: node mcp/tally-server.mjs   (normally launched by the MCP client via .mcp.json)
 // NOTE: stdout is the MCP protocol channel — log only to stderr.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { TALLY_URL, COMPANY, postXml, collectionRequest, decode } from "../lib/tally.mjs";
-import { getReceivables, field, fmtDate } from "../lib/receivables.mjs";
-import { createReminderDraft } from "../lib/reminders.mjs";
+import { TALLY_URL, COMPANY, tallyFetch, postXml, collectionRequest, decode } from "../lib/tally.mjs";
+import { field } from "../lib/receivables.mjs";
+import { receivablesView, ageingView } from "../lib/report.mjs";
+import { bucketLabels } from "../lib/ageing.mjs";
+import { CONFIG } from "../lib/config.mjs";
+import { createReminderDraft, createReminderDrafts, MAX_BATCH } from "../lib/reminders.mjs";
+import { loadDotEnv } from "../lib/env.mjs";
+import { previewRetainerInvoices, createRetainerInvoices, saveInvoiceDrafts } from "../lib/retainer-invoices.mjs";
+
+loadDotEnv(); // GOOGLE_CLIENT_ID / _SECRET, GMAIL_SCOPE, REMINDER_DRAFT_DESTINATION from the git-ignored .env
 
 const server = new McpServer({ name: "tally", version: "0.1.0" });
 
@@ -19,8 +29,10 @@ const ok = (data) => ({
 });
 const fail = (err) => ({
   isError: true,
-  content: [{ type: "text", text: `Tally request failed: ${err.message}. Check that TallyPrime is open, ` +
-    `company "${COMPANY}" is loaded, and the HTTP server is enabled at ${TALLY_URL}.` }],
+  content: [{ type: "text", text: err.rule
+    ? err.message // a business rule / configuration problem, not a connection problem
+    : `Tally request failed: ${err.message}. Check that TallyPrime is open, ` +
+      `company "${COMPANY}" is loaded, and the HTTP server is enabled at ${TALLY_URL}.` }],
 });
 const tool = (name, meta, fn) =>
   server.registerTool(name, { ...meta, annotations: { readOnlyHint: true, openWorldHint: false } },
@@ -35,7 +47,7 @@ tool("tally_status", {
   title: "Tally status",
   description: "Check that TallyPrime is reachable and list the companies currently open.",
 }, async () => {
-  const ping = (await (await fetch(TALLY_URL)).text()).replace(/<[^>]+>/g, "").trim();
+  const ping = (await tallyFetch()).replace(/<[^>]+>/g, "").trim();
   const xml = await postXml(collectionRequest("CompanyList", "Company", ["Name"]));
   const companies = [...xml.matchAll(/<COMPANY NAME="([^"]*)"/g)].map((m) => decode(m[1]));
   return { server: ping, url: TALLY_URL, configuredCompany: COMPANY, openCompanies: companies };
@@ -57,23 +69,39 @@ tool("list_ledgers", {
     .filter((l) => !group || l.group.toLowerCase() === group.toLowerCase());
 });
 
+const filters = {
+  asOf: isoDate.optional().describe("Ageing date, default today (India time). Past dates are refused unless enabled in config."),
+  customer: z.string().optional().describe("Case-insensitive substring match on customer name"),
+  retainerOnly: z.boolean().optional().describe(`Only Retainer customers (group "${CONFIG.retainerGroup}" and its sub-groups)`),
+};
+
 tool("get_receivables", {
   title: "Outstanding receivables",
-  description: "Bill-wise open receivables with bill date, due date (bill date + credit days), overdue days, " +
-    "outstanding amount (INR) and customer email. Sorted most overdue first.",
+  description: "Bill-wise open receivables of customers (Sundry Debtors, incl. sub-groups): bill date, due date " +
+    "(+ dueDateSource), overdue days, balance (net of part payments) and customer email status. `bills` = bills " +
+    "worth chasing: overdue by >= minOverdueDays, balance >= minAmount, not on hold. `customers` gives each " +
+    "customer's unadjusted advances/credits, netOverdue and whether a reminder is allowed (reminder.eligible / " +
+    "reminder.reason). Left-out bills are listed in onHold, belowThreshold and billsWithIssues — report them.",
   inputSchema: {
-    asOf: isoDate.optional().describe("Ageing date, default today"),
-    minOverdueDays: z.number().int().min(0).optional().describe("Only bills overdue by at least this many days"),
-    customer: z.string().optional().describe("Case-insensitive substring match on customer name"),
-    retainerOnly: z.boolean().optional().describe('Only customers under "Retainer Customers"'),
+    ...filters,
+    minOverdueDays: z.number().int().min(0).optional().describe("Only bills overdue by at least this many days, e.g. 30, 60, 90"),
+    minAmount: z.number().min(0).optional().describe(`Only bills with balance >= this (INR). Default ${CONFIG.minBillBalance}`),
   },
-}, async ({ asOf, minOverdueDays = 0, customer, retainerOnly }) => {
-  const date = new Date(asOf ?? fmtDate(new Date()));
-  const rows = (await getReceivables(date)).filter((r) =>
-    r.overdueDays >= minOverdueDays &&
-    (!customer || r.customer.toLowerCase().includes(customer.toLowerCase())) &&
-    (!retainerOnly || r.retainer === "yes"));
-  return { asOf: fmtDate(date), count: rows.length, totalOutstanding: rows.reduce((s, r) => s + r.outstanding, 0), bills: rows };
+}, (args) => receivablesView(args));
+
+tool("get_ageing_report", {
+  title: "Outstanding ageing report",
+  description: `Customer-wise ageing of receivables in buckets (${bucketLabels(CONFIG.ageingBuckets).join(", ")}) by days ` +
+    "overdue from the due date, with unadjusted advances/credit notes, on-account amounts, net due, Retainer flag, " +
+    "hold status, email status, totals and warnings. includePayments adds each bill's billed amount and the " +
+    "receipts/credit notes adjusted against it (slower: reads all vouchers).",
+  inputSchema: {
+    ...filters,
+    includePayments: z.boolean().optional().describe("Add bill-wise payment history (default false)"),
+  },
+}, async (args) => {
+  const v = await ageingView(args);
+  return { ...v.report, ...(args.includePayments && { bills: v.rows }) };
 });
 
 tool("list_vouchers", {
@@ -106,28 +134,104 @@ tool("list_vouchers", {
     (!party || v.party.toLowerCase().includes(party.toLowerCase())));
 });
 
-// The only tool that writes — a local draft file plus an audit log line. Never writes to Tally, never sends.
+// The only tools that write: a local draft file (+ optionally a Gmail DRAFT) and an audit log line.
+// Never writes to Tally, never sends — this project has no email-sending code, and the Gmail client
+// can only create drafts (lib/gmail/client.mjs).
 // Checks are enforced in lib/reminders.mjs: recipient comes from the Tally ledger, bills must be open,
 // duplicates within the cooldown are skipped, every attempt is audit-logged.
+const destination = z.enum(["local", "gmail"]).optional().describe(
+  `"gmail" = a draft in the connected Gmail account's Drafts folder. "local" = an .eml file in the project's drafts/ ` +
+  `folder instead. Default: "${process.env.REMINDER_DRAFT_DESTINATION || "local"}" (REMINDER_DRAFT_DESTINATION). Leave it out ` +
+  `unless the user asks for a specific place.`);
+const draftInput = {
+  customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
+  bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),
+  subject: z.string().min(1).max(200),
+  body: z.string().min(1).describe("Plain-text email body including signature (an HTML version is generated automatically)"),
+};
+const writeAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+
 server.registerTool("save_reminder_draft", {
   title: "Save reminder draft",
-  description: "Save one payment reminder email as a draft .eml file under drafts/<today>/<customer>.eml. " +
+  description: "Save ONE payment reminder email as a draft: a .eml file under drafts/<today>/<customer>.eml and, with " +
+    "destination \"gmail\", also a draft in the user's Gmail Drafts folder. " +
     "The recipient is taken from the customer's ledger email in Tally (you cannot set it). " +
     "Every bill listed must be an open receivable of that customer and be mentioned in the body. " +
-    "Bills already drafted in the last few days are skipped (status skipped_duplicate) — do not retry those. " +
-    "Does NOT send the email and does NOT change Tally.",
-  inputSchema: {
-    customer: z.string().min(1).describe("Exact customer ledger name from get_receivables"),
-    bills: z.array(z.string().min(1)).min(1).describe("Bill numbers included in this email, e.g. [\"DEMO-001\"]"),
-    subject: z.string().min(1).max(200),
-    body: z.string().min(1).describe("Plain-text email body including signature"),
-  },
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    "Bills already drafted recently (or already in a Gmail draft today) are skipped (status skipped_duplicate) — do not retry those. " +
+    "For several customers prefer save_reminder_drafts. Does NOT send the email and does NOT change Tally.",
+  inputSchema: { ...draftInput, destination },
+  annotations: writeAnnotations,
 }, async (args) => {
   try {
     return ok(await createReminderDraft(args));
   } catch (e) {
     return { isError: true, content: [{ type: "text", text: `Draft not saved: ${e.message}` }] };
+  }
+});
+
+server.registerTool("save_reminder_drafts", {
+  title: "Save reminder drafts (several customers)",
+  description: `Save up to ${MAX_BATCH} payment reminder drafts in one run (one per customer), locally or in Gmail Drafts. ` +
+    "Same rules as save_reminder_draft for every item. Returns a runId, counts per status and one result per customer: " +
+    "saved (with gmailMessageId when in Gmail) | skipped_duplicate | rejected | error | not_processed, each with a reason. " +
+    "One failure does not stop the others. Does NOT send any email and does NOT change Tally.",
+  inputSchema: { drafts: z.array(z.object(draftInput)).min(1).max(MAX_BATCH), destination },
+  annotations: writeAnnotations,
+}, async (args) => {
+  try {
+    return ok(await createReminderDrafts(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `Drafts not saved: ${e.message}` }] };
+  }
+});
+
+// ---------- Monthly Retainer invoices (proposal Workflow A) ----------
+const period = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Use YYYY-MM").optional()
+  .describe("Billing month YYYY-MM. Default: the current month (India time).");
+const invoiceCustomers = z.array(z.string().min(1)).optional()
+  .describe("Only these Retainer customers (exact ledger names). Default: every customer that is ready.");
+
+tool("preview_retainer_invoices", {
+  title: "Preview Retainer invoices",
+  description: "READ-ONLY. Lists the monthly Retainer invoices that would be created in Tally for a billing month: " +
+    "customer, bill reference, fee, CGST/SGST, total, invoice date, due date, recipient, and a status per customer " +
+    "(ready | already_invoiced | blocked | needs_setup) with issues/notes. Returns an approvalCode for the ready " +
+    "invoices. Show this preview to the user before anything is created.",
+  inputSchema: { period },
+}, (args) => previewRetainerInvoices(args));
+
+server.registerTool("create_retainer_invoices", {
+  title: "Create Retainer invoices in Tally",
+  description: "WRITES TO TALLY: creates the Sales vouchers shown in preview_retainer_invoices, then exports each " +
+    "invoice PDF and saves an email draft with the PDF attached (never sent). ONLY call this after you showed the " +
+    "preview to the user and they explicitly confirmed it in this conversation; pass the approvalCode from that " +
+    "preview. The tool re-checks everything and refuses if anything changed, if writing is switched off, or for a " +
+    "duplicate month. Never call it again to retry a failed or unclear invoice — report it to the user instead.",
+  inputSchema: {
+    approvalCode: z.string().regex(/^INV-[0-9A-F]{8}$/).describe("approvalCode from the preview the user confirmed"),
+    period, customers: invoiceCustomers, destination,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+}, async (args) => {
+  try {
+    return ok(await createRetainerInvoices(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `No invoices created: ${e.message}` }] };
+  }
+});
+
+server.registerTool("save_invoice_drafts", {
+  title: "Save invoice email drafts",
+  description: "For Retainer invoices ALREADY created by create_retainer_invoices in a month: export the invoice PDF " +
+    "from Tally (read-only) and save the email draft with the PDF attached, for invoices that have no draft yet " +
+    "(e.g. the email was missing or Gmail was not connected). Does not create invoices, does not send.",
+  inputSchema: { period, customers: invoiceCustomers, destination },
+  annotations: writeAnnotations,
+}, async (args) => {
+  try {
+    return ok(await saveInvoiceDrafts(args));
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: `Drafts not saved: ${e.message}` }] };
   }
 });
 

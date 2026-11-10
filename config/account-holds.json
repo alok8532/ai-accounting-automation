@@ -1,0 +1,12 @@
+{
+  "_readme": "Approved disputed / on-hold accounts. Held customers or bills stay in the ageing report but get NO reminders. Every entry needs customer, reason, approvedBy and approvedOn (YYYY-MM-DD). Optional: bill (hold only that bill), until (YYYY-MM-DD, last day of the hold). See docs/ACCOUNTING_RULES.md section 8.",
+  "_example": {
+    "customer": "Kapoor Builders",
+    "bill": "DEMO-009",
+    "reason": "Customer disputes site-visit charges",
+    "approvedBy": "Owner",
+    "approvedOn": "2026-11-06",
+    "until": "2026-11-30"
+  },
+  "holds": []
+}

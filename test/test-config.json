@@ -1,0 +1,11 @@
+{
+  "_readme": "Test copy of config/receivables.json. Differs only in allowPastAsOf=true, so tests can use fixed dates.",
+  "debtorsGroup": "Sundry Debtors",
+  "retainerGroup": "Retainer Customers",
+  "ageingBuckets": [30, 60, 90],
+  "dueDateFallback": "ledger-default",
+  "minBillBalance": 100,
+  "minCustomerNetOverdue": 0,
+  "allowPastAsOf": true,
+  "holdsFile": "test/no-such-holds-file.json"
+}
